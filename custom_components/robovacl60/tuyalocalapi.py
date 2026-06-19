@@ -842,7 +842,8 @@ class TuyaDevice:
         try:
             sock.connect((self.host, self.port))
         except (socket.timeout, TimeoutError):
-            self._dps[self.model_details.commands[RobovacCommand.ERROR]] = ("CONNECTION_FAILED")
+            error_code = self.model_details.commands[RobovacCommand.ERROR]["code"]
+            self._dps[str(error_code)] = "CONNECTION_FAILED"
             raise ConnectionTimeoutException("Connection timed out")
         loop = asyncio.get_running_loop()
         loop.create_connection
@@ -875,6 +876,17 @@ class TuyaDevice:
         self._connected = False
         self.last_pong = 0
 
+        # Release all pending response listeners so that any async_receive()
+        # calls waiting on a semaphore don't hang until their individual
+        # timeouts fire.  We store a ResponseTimeoutException so the waiter
+        # gets a clean TuyaException rather than an opaque cancellation.
+        for seq, waiter in list(self._listeners.items()):
+            if isinstance(waiter, asyncio.Semaphore):
+                self._listeners[seq] = ResponseTimeoutException(
+                    "Disconnected while waiting for response to sequence {}".format(seq)
+                )
+                waiter.release()
+
         if self.writer is not None:
             self.writer.close()
             await self.writer.wait_closed()
@@ -891,7 +903,12 @@ class TuyaDevice:
         payload_bytes = json.dumps(payload_dict).encode('utf-8')
         encrypt = False if self.version < (3, 3) else True
         message = Message(Message.GET_COMMAND, payload_bytes, encrypt=encrypt, device=self)
-        self._queue.append(message)
+        # Send directly (not via process_queue) because we await the response
+        # inline here.  Queuing the message AND immediately waiting on the
+        # semaphore creates a race: if process_queue tries to send while
+        # _connected=False, async_receive returns None and the stale message
+        # stays in the queue to be retried forever.
+        await self._async_send(message)
         response = await self.async_receive(message)
         if response is not None:
             await self.async_update_state(response)
@@ -1110,7 +1127,7 @@ class TuyaDevice:
                     return response
                 return None
             except TimeoutError:
-                del self._listeners[message.sequence]
+                self._listeners.pop(message.sequence, None)
                 await self.async_disconnect()
                 raise ResponseTimeoutException(
                     "Timed out waiting for response to sequence number {}".format(
@@ -1118,7 +1135,7 @@ class TuyaDevice:
                     )
                 )
             except Exception as e:
-                del self._listeners[message.sequence]
+                self._listeners.pop(message.sequence, None)
                 await self.async_disconnect()
                 raise e
 

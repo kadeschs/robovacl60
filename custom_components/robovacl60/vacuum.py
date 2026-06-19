@@ -70,6 +70,11 @@ ATTR_MODE = "mode"
 _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=REFRESH_RATE)
 UPDATE_RETRIES = 3
+# After UPDATE_RETRIES consecutive failures, force a full reconnect at most
+# this often (seconds) rather than hammering a dead connection every poll.
+# Tuya devices that have gone to sleep on the dock often need the old socket
+# fully torn down before they'll accept a new connection.
+RECOVERY_RETRY_INTERVAL = 60
 
 def decode_mode_string(mode_raw: str) -> str:
     lookup = {
@@ -85,22 +90,28 @@ def decode_mode_string(mode_raw: str) -> str:
     return lookup.get(mode_raw, f"unknown ({mode_raw})")
 
 def decode_status_string(status_raw: str) -> str:
+    """Decode the L60 status DPS 153 payload to a VacuumActivity-compatible string.
+
+    HA's VacuumActivity values are: cleaning, docked, idle, paused, returning, error.
+    All returned strings must be one of those or a value that the activity property
+    can map safely — unknown values surface as idle rather than false errors.
+    """
     lookup = {
-        "BgoAEAUyAA==": "cleaning", # auto_cleaning
-        "BgoAEAVSAA==": "position", # auto_positioning
-        "CAoAEAUyAggB": "paused", # auto_paused
-        "CAoCCAEQBTIA": "cleaning", # room_cleaning
-        "CAoCCAEQBVIA": "position", # room_positioning
+        "BgoAEAUyAA==": "cleaning",   # auto_cleaning
+        "BgoAEAVSAA==": "cleaning",   # auto_positioning (still active, treat as cleaning)
+        "CAoAEAUyAggB": "paused",     # auto_paused
+        "CAoCCAEQBTIA": "cleaning",   # room_cleaning
+        "CAoCCAEQBVIA": "cleaning",   # room_positioning
         "CgoCCAEQBTICCAE=": "paused", # room_paused
-        "CAoCCAIQBTIA": "cleaning", # zone_cleaning
-        "CAoCCAIQBVIA": "position", # zone_positioning
+        "CAoCCAIQBTIA": "cleaning",   # zone_cleaning
+        "CAoCCAIQBVIA": "cleaning",   # zone_positioning
         "CgoCCAIQBTICCAE=": "paused", # zone_paused
-        "BAoAEAY=": "start_manual",
-        "BBAHQgA=": "returning",
-        "BBADGgA=": "charging",
-        "BhADGgIIAQ==": "idle",
-        "AA==": "standby",
-        "AhAB": "sleeping",
+        "BAoAEAY=": "cleaning",       # start_manual
+        "BBAHQgA=": "returning",      # returning to base
+        "BBADGgA=": "docked",         # charging on base
+        "BhADGgIIAQ==": "docked",     # idle on base (fully charged)
+        "AA==": "docked",             # standby — on base, not cleaning
+        "AhAB": "docked",             # sleeping on base — this is the key L60 sleep state
     }
     return lookup.get(status_raw, f"unknown ({status_raw})")
 
@@ -274,22 +285,42 @@ class RoboVacEntity(StateVacuumEntity):
     @property
     def activity(self) -> str:
         """Return current vacuum activity."""
+        # If we have no connection to the device yet, report as unavailable/idle
+        # rather than ERROR — CONNECTION_FAILED is a transport state, not a vacuum error.
+        if self._attr_error_code == "CONNECTION_FAILED":
+            return VacuumActivity.IDLE
+
         decoded_status = decode_status_string(self.tuya_state_raw or "")
 
-        if (
-            isinstance(self.error_code, (int, str))
-            and str(self.error_code) not in [0, "no_error", None]
+        # Only report VacuumActivity.ERROR for real device errors (DPS 177 non-zero).
+        # Guard against the broken comparison `str(x) not in [0, ...]` (int vs str).
+        error_str = str(self._attr_error_code) if self._attr_error_code is not None else "0"
+        has_real_error = (
+            self._attr_error_code is not None
+            and error_str not in ("0", "no_error", "None", "")
             and "unknown" in decoded_status.lower()
-        ):
+        )
+        if has_real_error:
             _LOGGER.debug(
-                "State changed to error. Error message: {}".format(
-                    getErrorMessage(self.error_code)
-                )
+                "State changed to error. Error message: %s",
+                getErrorMessage(self.error_code),
             )
             return VacuumActivity.ERROR
 
-        if decoded_status:
-            return decoded_status.lower()
+        # Map decoded status to a valid VacuumActivity value.
+        # All known statuses already return HA-valid strings from decode_status_string.
+        # Fall back to IDLE for anything unrecognised rather than surfacing a raw string.
+        valid_activities = {"cleaning", "docked", "idle", "paused", "returning", "error"}
+        if decoded_status and decoded_status not in valid_activities:
+            _LOGGER.debug(
+                "Unrecognised status payload %r decoded as %r — reporting idle",
+                self.tuya_state_raw,
+                decoded_status,
+            )
+            return VacuumActivity.IDLE
+
+        if decoded_status and decoded_status in valid_activities:
+            return decoded_status
 
         return VacuumActivity.IDLE
 
@@ -409,6 +440,7 @@ class RoboVacEntity(StateVacuumEntity):
         self._attr_access_token = item[CONF_ACCESS_TOKEN]
         self.vacuum: Optional[RoboVac] = None
         self.update_failures = 0
+        self._next_recovery_attempt = 0
         self._attr_stat_dps_raw = None
         self.tuyastatus: dict[str, Any] | None = None
 
@@ -511,6 +543,9 @@ class RoboVacEntity(StateVacuumEntity):
         try:
             await self.vacuum.async_get()
             self.update_failures = 0
+            self._next_recovery_attempt = 0
+            # Clear backoff so pings resume after a successful reconnect.
+            self.vacuum._backoff = False
             self.update_entity_values()
             _LOGGER.debug("Successfully updated vacuum %s", self._attr_name)
         except TuyaException as e:
@@ -523,13 +558,46 @@ class RoboVacEntity(StateVacuumEntity):
                 str(e)
             )
 
+            # Suppress pings immediately on the first GET failure so the ping
+            # task doesn't keep hammering connect/disconnect every 10 s and
+            # resetting process_queue._failures before the retry threshold is
+            # reached.  Pings resume on the next successful async_get().
+            self.vacuum._backoff = True
+            self.vacuum._queue.clear()
+
             # Set error code after maximum retries
             if self.update_failures >= UPDATE_RETRIES:
                 self._attr_error_code = "CONNECTION_FAILED"
-                _LOGGER.error(
-                    "Maximum update retries reached for vacuum %s. Marking as unavailable",
-                    self._attr_name
+
+                now = time.time()
+                next_attempt = getattr(self, "_next_recovery_attempt", 0)
+                if now < next_attempt:
+                    # Still within backoff window: stay quiet, don't spam logs
+                    return
+
+                _LOGGER.warning(
+                    "Vacuum %s unreachable after %d attempts (likely asleep on "
+                    "base or offline). Forcing a fresh reconnect attempt; will "
+                    "retry again in %d seconds if this fails.",
+                    self._attr_name,
+                    self.update_failures,
+                    RECOVERY_RETRY_INTERVAL,
                 )
+
+                # Force a clean reconnect on the next poll instead of repeatedly
+                # hammering a connection the device has already given up on.
+                # Many Tuya devices (including the L60) need the socket fully
+                # torn down before they'll accept a new connection after sleep.
+                try:
+                    await self.vacuum.async_disconnect()
+                except Exception as disconnect_err:
+                    _LOGGER.debug(
+                        "Error while forcing disconnect for %s: %s",
+                        self._attr_name,
+                        disconnect_err,
+                    )
+
+                self._next_recovery_attempt = now + RECOVERY_RETRY_INTERVAL
 
     async def pushed_update_handler(self) -> None:
         """Handle updates pushed from the vacuum.
@@ -662,10 +730,28 @@ class RoboVacEntity(StateVacuumEntity):
         else:
             self._attr_tuya_state = "Unknown"
 
+        # Log the sleep state explicitly so it's visible in debug logs but not
+        # treated as a problem — "AhAB" is a normal L60 deep-sleep-on-dock state.
+        if status_raw == "AhAB":
+            _LOGGER.debug(
+                "Vacuum %s is in sleep/deep-charge state on base (DPS 153=AhAB) — "
+                "this is normal L60 behaviour, not an error.",
+                self._attr_name,
+            )
+
         _LOGGER.debug("Decoded DPS [153] status: %s", self._attr_tuya_state)
 
         error_code = self.tuyastatus.get("177")
-        self._attr_error_code = error_code if error_code is not None else 0
+        if error_code is not None:
+            # Real device error arrived — always store it (may be 0 = no error,
+            # which correctly clears a previous error_code).
+            self._attr_error_code = error_code
+        elif self._attr_error_code == "CONNECTION_FAILED":
+            # We received a valid DPS update but DPS 177 was absent in this
+            # payload.  Keep the existing error_code as 0 (clear) rather than
+            # re-setting to CONNECTION_FAILED, since we clearly have comms now.
+            self._attr_error_code = 0
+        # else: leave whatever error_code was already set (could be 0)
 
     def _update_mode_and_fan_speed(self) -> None:
         """Update the mode and fan speed attributes."""
@@ -687,7 +773,7 @@ class RoboVacEntity(StateVacuumEntity):
         if mode:
             self._attr_mode = decode_mode_string(mode)
         else:
-            self._attr_mode = "N/A"
+            self._attr_mode = "Auto"
 
 
         # Update fan speed attribute
