@@ -5,7 +5,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "custom_components/robovac/manifest.json",
+          "path": "custom_components/robovacl60/manifest.json",
           "jsonpath": "$.version"
         }
       ]
