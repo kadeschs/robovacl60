@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -64,3 +65,4 @@ jobs:
           echo "Version determined by release-please: ${{ needs.release-please.outputs.version }}"
           echo "This step validates the integration with HACS tools."
           echo "Ensure your repository is correctly configured in HACS."
+
