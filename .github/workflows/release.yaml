@@ -24,18 +24,11 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Generate GitHub App Token
-        id: generate_token
-        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e # v2.0.6
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-
       - name: Run Release Please
         id: release
         uses: googleapis/release-please-action@a02a34c4d625f9be7cb89156071d8567266a2445 # v4
         with:
-          token: ${{ steps.generate_token.outputs.token }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   publish-hacs:
     name: Publish to HACS (Optional)
@@ -65,4 +58,3 @@ jobs:
           echo "Version determined by release-please: ${{ needs.release-please.outputs.version }}"
           echo "This step validates the integration with HACS tools."
           echo "Ensure your repository is correctly configured in HACS."
-
