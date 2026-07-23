@@ -384,10 +384,6 @@ class RoboVacEntity(StateVacuumEntity):
         ):
             data[ATTR_CONSUMABLES] = self.consumables
 
-        if self._attr_battery_level is not None:
-            data["battery_level"] = self._attr_battery_level
-            data["battery_icon"] = "mdi:battery-alert" if self._attr_battery_level <= 10 else "mdi:battery"
-
         if self.fan_speed:
             data[ATTR_FAN_SPEED] = self.fan_speed
 
@@ -432,7 +428,6 @@ class RoboVacEntity(StateVacuumEntity):
         super().__init__()
 
         # Initialize basic attributes
-        self._attr_battery_level = 0
         self._attr_name = item[CONF_NAME]
         self._attr_unique_id = item[CONF_ID]
         self._attr_model_code = item[CONF_MODEL]
@@ -637,7 +632,6 @@ class RoboVacEntity(StateVacuumEntity):
             self._attr_cmd_dps_raw = "152"
 
         # Update common attributes for all models
-        self._update_battery_level()
         self._update_state_and_error()
         self._update_mode_and_fan_speed()
 
@@ -690,32 +684,6 @@ class RoboVacEntity(StateVacuumEntity):
 
         # Fall back to default codes
         return TUYA_CONSUMABLES_CODES
-
-    def _update_battery_level(self) -> None:
-        """Update the battery level attribute."""
-        if self.tuyastatus is None:
-            _LOGGER.warning("No tuyastatus available during battery DPS [163] update")
-            return
-
-        if "163" not in self.tuyastatus:
-            _LOGGER.debug("DPS [163] key absent from tuyastatus: %s", self.tuyastatus)
-            self._attr_battery_level = 0
-            return
-
-        battery_level = self.tuyastatus.get("163")
-
-        if battery_level is not None:
-            try:
-                new_battery_level = max(0, min(100, int(battery_level)))
-                if new_battery_level != self._attr_battery_level:
-                    _LOGGER.debug("Battery level changed from %s to %s", self._attr_battery_level, new_battery_level)
-                self._attr_battery_level = new_battery_level
-            except (ValueError, TypeError):
-                _LOGGER.warning("Invalid battery level DPS [163] value: %s", battery_level)
-                self._attr_battery_level = 0
-        else:
-            _LOGGER.warning("Battery DPS [163] was missing or None")
-            self._attr_battery_level = 0
 
     def _update_state_and_error(self) -> None:
         """Update the state and error code attributes."""
