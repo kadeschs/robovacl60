@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.2](https://github.com/kadeschs/robovacl60/compare/v1.4.1...v1.4.2) (2026-11-07)
+
+
+### Bug Fixes
+
+* make CI green and fix bugs exposed by lint, mypy and tests ([cd7bcd9](https://github.com/kadeschs/robovacl60/commit/cd7bcd9ccfd22398bc0d65ce18453cdb4e261277))
+
+
+### Documentation
+
+* correct which L60 DPS arrive in GET replies ([dd6fbd6](https://github.com/kadeschs/robovacl60/commit/dd6fbd6113e4632aea1eb05a7dc018b23476ff9d))
+
 ## [1.4.1](https://github.com/kadeschs/robovacl60/compare/v1.4.0...v1.4.1) (2026-11-07)
 
 
