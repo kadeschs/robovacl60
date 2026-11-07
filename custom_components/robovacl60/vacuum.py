@@ -90,6 +90,87 @@ def decode_mode_string(mode_raw: str) -> str:
     }
     return lookup.get(mode_raw, f"unknown ({mode_raw})")
 
+def decode_l60_error_codes(raw: Any) -> set[int]:
+    """Decode the L60's DPS 177 ErrorCode protobuf to its active codes.
+
+    Schema (matches damacus/robovac proto_decode.decode_error_code): a
+    length-prefixed message where field 1 is an uptime stamp (not an error),
+    field 2 = repeated error, field 3 = repeated warn, field 10 = new_code
+    {1: error, 2: warn}. Code 0 means none. The L60 never sends a literal
+    "0", so the raw string can't be compared against "0" to mean no error.
+    Returns an empty set for no error, the CONNECTION_FAILED sentinel, or
+    anything that does not decode.
+    """
+    if isinstance(raw, int):
+        return {raw} - {0}
+    if not isinstance(raw, str) or not raw or raw == "CONNECTION_FAILED":
+        return set()
+
+    def _varint(buf: bytes, i: int) -> tuple[int, int]:
+        result = shift = 0
+        while True:
+            if i >= len(buf):
+                raise ValueError("truncated varint")
+            byte = buf[i]
+            i += 1
+            result |= (byte & 0x7F) << shift
+            shift += 7
+            if not byte & 0x80:
+                return result, i
+
+    def _parse(buf: bytes) -> dict[int, list[Any]]:
+        fields: dict[int, list[Any]] = {}
+        i = 0
+        while i < len(buf):
+            key, i = _varint(buf, i)
+            field, wire = key >> 3, key & 7
+            if wire == 0:
+                value, i = _varint(buf, i)
+            elif wire == 2:
+                length, i = _varint(buf, i)
+                if i + length > len(buf):
+                    raise ValueError("truncated field")
+                value, i = buf[i:i + length], i + length
+            elif wire == 5:
+                i += 4
+                continue
+            elif wire == 1:
+                i += 8
+                continue
+            else:
+                raise ValueError(f"unsupported wire type {wire}")
+            fields.setdefault(field, []).append(value)
+        return fields
+
+    def _collect(values: list[Any] | None, codes: set[int]) -> None:
+        for value in values or []:
+            if isinstance(value, int):
+                codes.add(value)
+            else:  # packed repeated uint32
+                j = 0
+                while j < len(value):
+                    code, j = _varint(value, j)
+                    codes.add(code)
+
+    codes: set[int] = set()
+    try:
+        data = base64.b64decode(raw, validate=True)
+        length, start = _varint(data, 0)
+        body = data[start:] if start + length == len(data) else data
+        fields = _parse(body)
+        _collect(fields.get(2), codes)
+        _collect(fields.get(3), codes)
+        for new_code in fields.get(10, []):
+            if isinstance(new_code, (bytes, bytearray)) and new_code:
+                sub = _parse(bytes(new_code))
+                _collect(sub.get(1), codes)
+                _collect(sub.get(2), codes)
+    except ValueError:
+        return set()
+    codes.discard(0)
+    return codes
+
+
 def decode_status_string(status_raw: str) -> str:
     """Decode the L60 status DPS 153 payload to a VacuumActivity-compatible string.
 
@@ -295,10 +376,11 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
 
         # Only report VacuumActivity.ERROR for real device errors (DPS 177 non-zero).
         # Guard against the broken comparison `str(x) not in [0, ...]` (int vs str).
-        error_str = str(self._attr_error_code) if self._attr_error_code is not None else "0"
+        # The L60's DPS 177 is a protobuf ErrorCode, never literally "0".
+        # Decode it, so a no-error payload that arrives before DPS 153 in a
+        # push burst is not reported as an error (Session 358).
         has_real_error = (
-            self._attr_error_code is not None
-            and error_str not in ("0", "no_error", "None", "")
+            bool(decode_l60_error_codes(self._attr_error_code))
             and "unknown" in decoded_status.lower()
         )
         if has_real_error:
@@ -342,6 +424,10 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
         else:
             data[ATTR_ERROR] = error_message
 
+
+        error_codes = decode_l60_error_codes(self._attr_error_code)
+        if error_codes:
+            data[ATTR_ERROR] = ", ".join(f"error_{c}" for c in sorted(error_codes))
 
         data["id"] = self._attr_unique_id
         data["model"] = self._attr_model_code
