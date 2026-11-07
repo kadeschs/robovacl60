@@ -48,7 +48,7 @@ ignore_missing_imports = true
 
 # Disable override check for config_flow.py
 [[tool.mypy.overrides]]
-module = "custom_components.robovac.config_flow"
+module = "custom_components.robovacl60.config_flow"
 disallow_subclassing_any = false
 disable_error_code = ["override"]
 strict_optional = false

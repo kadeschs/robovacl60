@@ -1,177 +1,73 @@
-"""Test fixtures for RoboVac integration tests."""
+"""Test fixtures for the Eufy RoboVac L60 (T2267) integration."""
 
 import os
 import sys
-import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
-# Add the project root directory to the Python path
+import pytest
+from homeassistant.const import (
+    CONF_ACCESS_TOKEN,
+    CONF_DESCRIPTION,
+    CONF_ID,
+    CONF_IP_ADDRESS,
+    CONF_MAC,
+    CONF_MODEL,
+    CONF_NAME,
+)
+
+# Make custom_components importable from the repository root
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-# Import from pytest_homeassistant_custom_component instead of directly from homeassistant
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-from homeassistant.components.vacuum import VacuumEntityFeature
-from homeassistant.const import (
-    CONF_ACCESS_TOKEN,
-    CONF_MODEL,
-    CONF_NAME,
-    CONF_ID,
-    CONF_IP_ADDRESS,
-    CONF_DESCRIPTION,
-    CONF_MAC,
-)
-
-from custom_components.robovac.vacuums.base import RoboVacEntityFeature
+from custom_components.robovacl60.robovac import RoboVac  # noqa: E402
+from custom_components.robovacl60.vacuums.T2267 import T2267  # noqa: E402
 
 
-# This fixture is required for testing custom components
 @pytest.fixture(autouse=True)
 def auto_enable_custom_integrations(enable_custom_integrations):
     """Enable custom integrations for testing."""
     yield
 
 
+def t2267_model() -> RoboVac:
+    """Return a RoboVac carrying the real T2267 model details, without networking.
+
+    RoboVac.__init__ would start TuyaDevice's queue task; the model-detail helpers
+    only need ``model_details``.
+    """
+    vac = RoboVac.__new__(RoboVac)
+    vac.model_details = T2267
+    vac.model_code = "T2267"
+    return vac
+
+
 @pytest.fixture
 def mock_robovac():
-    """Create a mock RoboVac device."""
+    """A mocked T2267 device whose model helpers are the real implementation."""
+    model = t2267_model()
     mock = MagicMock()
-    # Set up common return values
-    mock.getHomeAssistantFeatures.return_value = (
-        VacuumEntityFeature.BATTERY
-        | VacuumEntityFeature.CLEAN_SPOT
-        | VacuumEntityFeature.FAN_SPEED
-        | VacuumEntityFeature.LOCATE
-        | VacuumEntityFeature.PAUSE
-        | VacuumEntityFeature.RETURN_HOME
-        | VacuumEntityFeature.SEND_COMMAND
-        | VacuumEntityFeature.START
-        | VacuumEntityFeature.STATE
-        | VacuumEntityFeature.STOP
-    )
-    mock.getRoboVacFeatures.return_value = (
-        RoboVacEntityFeature.EDGE | RoboVacEntityFeature.SMALL_ROOM
-    )
-    mock.getFanSpeeds.return_value = ["No Suction", "Standard", "Boost IQ", "Max"]
+    mock.getHomeAssistantFeatures.return_value = model.getHomeAssistantFeatures()
+    mock.getRoboVacFeatures.return_value = model.getRoboVacFeatures()
+    mock.getFanSpeeds.return_value = model.getFanSpeeds()
+    mock.getDpsCodes.return_value = model.getDpsCodes()
+    mock.getRoboVacCommandValue.side_effect = model.getRoboVacCommandValue
     mock._dps = {}
-
-    # Set up async methods with AsyncMock
-    mock.async_get = AsyncMock(return_value=mock._dps)
-    mock.async_set = AsyncMock(return_value=True)
-    mock.async_disable = AsyncMock(return_value=True)
-
-    return mock
-
-
-@pytest.fixture
-def mock_g30():
-    """Create a mock G30 RoboVac device."""
-    mock = MagicMock()
-    # Set up common return values
-    mock.getHomeAssistantFeatures.return_value = (
-        VacuumEntityFeature.BATTERY
-        | VacuumEntityFeature.CLEAN_SPOT
-        | VacuumEntityFeature.FAN_SPEED
-        | VacuumEntityFeature.LOCATE
-        | VacuumEntityFeature.PAUSE
-        | VacuumEntityFeature.RETURN_HOME
-        | VacuumEntityFeature.SEND_COMMAND
-        | VacuumEntityFeature.START
-        | VacuumEntityFeature.STATE
-        | VacuumEntityFeature.STOP
-    )
-    mock.getRoboVacFeatures.return_value = (
-        RoboVacEntityFeature.EDGE | RoboVacEntityFeature.SMALL_ROOM
-    )
-    mock.getFanSpeeds.return_value = ["No Suction", "Standard", "Boost IQ", "Max"]
-    mock._dps = {}
-
-    # Set up async methods with AsyncMock
-    mock.async_get = AsyncMock(return_value=mock._dps)
-    mock.async_set = AsyncMock(return_value=True)
-    mock.async_disable = AsyncMock(return_value=True)
-
+    mock.async_get = AsyncMock(return_value=None)
+    mock.async_set = AsyncMock(return_value=None)
+    mock.async_disconnect = AsyncMock(return_value=None)
+    mock.async_disable = AsyncMock(return_value=None)
     return mock
 
 
 @pytest.fixture
 def mock_vacuum_data():
-    """Create mock vacuum configuration data."""
+    """Config data for one L60 vacuum, as stored in the config entry."""
     return {
-        CONF_NAME: "Test RoboVac",
-        CONF_ID: "test_robovac_id",
-        CONF_MODEL: "T2118",  # 15C model
-        CONF_IP_ADDRESS: "192.168.1.100",
-        CONF_ACCESS_TOKEN: "test_access_token",
-        CONF_DESCRIPTION: "RoboVac 15C",
-        CONF_MAC: "aa:bb:cc:dd:ee:ff",
-    }
-
-
-@pytest.fixture
-def mock_g30_data():
-    """Create mock G30 vacuum configuration data."""
-    return {
-        CONF_NAME: "Test G30",
-        CONF_ID: "test_g30_id",
-        CONF_MODEL: "T2250",  # G30 model
-        CONF_IP_ADDRESS: "192.168.1.101",
-        CONF_ACCESS_TOKEN: "test_access_token_g30",
-        CONF_DESCRIPTION: "RoboVac G30",
-        CONF_MAC: "aa:bb:cc:dd:ee:00",
-    }
-
-
-@pytest.fixture
-def mock_l60():
-    """Create a mock L60 RoboVac device."""
-    mock = MagicMock()
-    # Set up common return values
-    mock.getHomeAssistantFeatures.return_value = (
-        VacuumEntityFeature.BATTERY
-        | VacuumEntityFeature.FAN_SPEED
-        | VacuumEntityFeature.LOCATE
-        | VacuumEntityFeature.PAUSE
-        | VacuumEntityFeature.RETURN_HOME
-        | VacuumEntityFeature.SEND_COMMAND
-        | VacuumEntityFeature.START
-        | VacuumEntityFeature.STATE
-        | VacuumEntityFeature.STOP
-    )
-    mock.getRoboVacFeatures.return_value = (
-        RoboVacEntityFeature.DO_NOT_DISTURB | RoboVacEntityFeature.BOOST_IQ
-    )
-    mock.getFanSpeeds.return_value = ["No Suction", "Standard", "Boost IQ", "Max"]
-    mock._dps = {}
-
-    # Set up model-specific DPS codes for L60 (T2278)
-    mock.getDpsCodes.return_value = {
-        "MODE": "152",
-        "STATUS": "173",
-        "RETURN_HOME": "153",
-        "FAN_SPEED": "154",
-        "LOCATE": "153",
-        "BATTERY_LEVEL": "172",
-        "ERROR_CODE": "169"
-    }
-
-    # Set up async methods with AsyncMock
-    mock.async_get = AsyncMock(return_value=mock._dps)
-    mock.async_set = AsyncMock(return_value=True)
-    mock.async_disable = AsyncMock(return_value=True)
-
-    return mock
-
-
-@pytest.fixture
-def mock_l60_data():
-    """Create mock L60 vacuum configuration data."""
-    return {
-        CONF_NAME: "Test L60",
+        CONF_NAME: "Basement",
         CONF_ID: "test_l60_id",
-        CONF_MODEL: "T2278",  # L60 model
-        CONF_IP_ADDRESS: "192.168.1.102",
-        CONF_ACCESS_TOKEN: "test_access_token_l60",
-        CONF_DESCRIPTION: "eufy Clean L60 Hybrid SES",
+        CONF_MODEL: "T2267",
+        CONF_IP_ADDRESS: "192.168.1.45",
+        CONF_ACCESS_TOKEN: "0123456789abcdef",
+        CONF_DESCRIPTION: "eufy Clean L60",
         CONF_MAC: "aa:bb:cc:dd:ee:11",
     }

@@ -77,18 +77,20 @@ UPDATE_RETRIES = 3
 # fully torn down before they'll accept a new connection.
 RECOVERY_RETRY_INTERVAL = 60
 
+
 def decode_mode_string(mode_raw: str) -> str:
     lookup = {
-         "BBoCCAE=": "auto",
-         "AggN": "pause",
-         "AA==": "auto",
-         "AggG": "home",
-         "AggO": "auto",
-         "AggB": "room",
-         "AggC": "zone",
-         "AggM": "auto",
+        "BBoCCAE=": "auto",
+        "AggN": "pause",
+        "AA==": "auto",
+        "AggG": "home",
+        "AggO": "auto",
+        "AggB": "room",
+        "AggC": "zone",
+        "AggM": "auto",
     }
     return lookup.get(mode_raw, f"unknown ({mode_raw})")
+
 
 def decode_l60_error_codes(raw: Any) -> set[int]:
     """Decode the L60's DPS 177 ErrorCode protobuf to its active codes.
@@ -122,6 +124,7 @@ def decode_l60_error_codes(raw: Any) -> set[int]:
         fields: dict[int, list[Any]] = {}
         i = 0
         while i < len(buf):
+            value: Any
             key, i = _varint(buf, i)
             field, wire = key >> 3, key & 7
             if wire == 0:
@@ -184,10 +187,10 @@ def decode_status_string(status_raw: str) -> str:
         "CAoAEAUyAggB": "paused",     # auto_paused
         "CAoCCAEQBTIA": "cleaning",   # room_cleaning
         "CAoCCAEQBVIA": "cleaning",   # room_positioning
-        "CgoCCAEQBTICCAE=": "paused", # room_paused
+        "CgoCCAEQBTICCAE=": "paused",  # room_paused
         "CAoCCAIQBTIA": "cleaning",   # zone_cleaning
         "CAoCCAIQBVIA": "cleaning",   # zone_positioning
-        "CgoCCAIQBTICCAE=": "paused", # zone_paused
+        "CgoCCAIQBTICCAE=": "paused",  # zone_paused
         "BAoAEAY=": "cleaning",       # start_manual
         "BBAHQgA=": "returning",      # returning to base
         "BBADGgA=": "docked",         # charging on base
@@ -196,6 +199,7 @@ def decode_status_string(status_raw: str) -> str:
         "AhAB": "docked",             # sleeping on base — this is the key L60 sleep state
     }
     return lookup.get(status_raw, f"unknown ({status_raw})")
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -255,7 +259,7 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
     def mode(self) -> str | None:
         """Return the cleaning mode of the vacuum cleaner."""
         return self._attr_mode
-        
+
     @property
     def mode_raw(self) -> str | None:
         return self._attr_mode_raw
@@ -365,7 +369,7 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
         return False
 
     @property
-    def activity(self) -> str:
+    def activity(self) -> VacuumActivity | None:
         """Return current vacuum activity."""
         # If we have no connection to the device yet, report as unavailable/idle
         # rather than ERROR — CONNECTION_FAILED is a transport state, not a vacuum error.
@@ -375,7 +379,6 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
         decoded_status = decode_status_string(self.tuya_state_raw or "")
 
         # Only report VacuumActivity.ERROR for real device errors (DPS 177 non-zero).
-        # Guard against the broken comparison `str(x) not in [0, ...]` (int vs str).
         # The L60's DPS 177 is a protobuf ErrorCode, never literally "0".
         # Decode it, so a no-error payload that arrives before DPS 153 in a
         # push burst is not reported as an error (Session 358).
@@ -403,7 +406,7 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
             return VacuumActivity.IDLE
 
         if decoded_status and decoded_status in valid_activities:
-            return decoded_status
+            return VacuumActivity(decoded_status)
 
         return VacuumActivity.IDLE
 
@@ -412,7 +415,8 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
         """Return the device-specific state attributes of this vacuum."""
         data: dict[str, Any] = {}
 
-        # Error attribute seems to generate a non-repeatable string for error conditions. Maybe token based?
+        # The raw error value can be a non-repeating payload (L60: protobuf with an
+        # uptime stamp), so only translated messages are shown.
         error_message = getErrorMessage(self._attr_error_code)
 
         # Filter out messages that just echo the raw code (no translation)
@@ -423,7 +427,6 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
             data[ATTR_ERROR] = "None"
         else:
             data[ATTR_ERROR] = error_message
-
 
         error_codes = decode_l60_error_codes(self._attr_error_code)
         if error_codes:
@@ -522,7 +525,7 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
         self._attr_access_token = item[CONF_ACCESS_TOKEN]
         self.vacuum: Optional[RoboVac] = None
         self.update_failures = 0
-        self._next_recovery_attempt = 0
+        self._next_recovery_attempt = 0.0
         self._attr_stat_dps_raw = None
         self.tuyastatus: dict[str, Any] | None = None
 
@@ -625,7 +628,7 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
         try:
             await self.vacuum.async_get()
             self.update_failures = 0
-            self._next_recovery_attempt = 0
+            self._next_recovery_attempt = 0.0
             # Clear backoff so pings resume after a successful reconnect.
             self.vacuum._backoff = False
             self.update_entity_values()
@@ -774,6 +777,8 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
 
     def _update_state_and_error(self) -> None:
         """Update the state and error code attributes."""
+        if self.tuyastatus is None:
+            return
         status_raw = self.tuyastatus.get("153")
         _LOGGER.debug("Raw DPS [153] status: %s", status_raw)
 
@@ -830,7 +835,6 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
         else:
             self._attr_mode = "Auto"
 
-
         # Update fan speed attribute
         self._attr_fan_speed = fan_speed if fan_speed is not None else ""
 
@@ -852,7 +856,7 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
         """Update cleaning statistics (area and time)."""
         if self.tuyastatus is None:
             return
-            
+
         self._log_all_dps_codes()  # Logs all DPS codes received from the vacuum
 
         # Keep dynamic lookup for unknown codes
@@ -864,15 +868,16 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
         if cleaning_time is not None:
             self._attr_cleaning_time = str(cleaning_time)
 
-            # Use hardcoded DPS for known attributes
-            auto_return = self.tuyastatus.get(self._get_dps_code("AUTO_RETURN"))  # Still unknown
-            self._attr_auto_return = str(auto_return) if auto_return is not None else None
+        # DND (157) and BoostIQ (159) arrive in every L60 GET reply. These were
+        # read with int keys (always None: DPS keys are strings) and only inside
+        # the cleaning_time block, which the L60 never enters.
+        do_not_disturb = self.tuyastatus.get(TuyaCodes.DO_NOT_DISTURB)
+        if do_not_disturb is not None:
+            self._attr_do_not_disturb = str(do_not_disturb)
 
-            do_not_disturb = self.tuyastatus.get(157)
-            self._attr_do_not_disturb = str(do_not_disturb) if do_not_disturb is not None else None
-
-            boost_iq = self.tuyastatus.get(159)
-            self._attr_boost_iq = str(boost_iq) if boost_iq is not None else None
+        boost_iq = self.tuyastatus.get(TuyaCodes.BOOST_IQ)
+        if boost_iq is not None:
+            self._attr_boost_iq = str(boost_iq)
 
         # Handle consumables with hardcoded DPS
         if (
@@ -898,7 +903,7 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
                                 self._attr_consumables = consumables["consumable"]["duration"]
                         except Exception as e:
                             _LOGGER.warning("Failed to decode consumable data: %s", str(e))
-                            
+
     def _log_all_dps_codes(self) -> None:
         """Log all DPS codes and values for inspection."""
         if self.tuyastatus is None:
@@ -919,10 +924,10 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
             _LOGGER.error("Cannot locate vacuum: vacuum not initialized")
             return
 
-        if self.tuyastatus is not None and self.tuyastatus.get(160):
-            await self.vacuum.async_set({160: False})
-        else:
-            await self.vacuum.async_set({160: True})
+        locating = self.tuyastatus is not None and self._is_value_true(
+            self.tuyastatus.get(TuyaCodes.LOCATE)
+        )
+        await self.vacuum.async_set({TuyaCodes.LOCATE: not locating})
 
     async def async_return_to_base(self, **kwargs: Any) -> None:
         """Set the vacuum cleaner to return to the dock.
@@ -935,9 +940,8 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
             _LOGGER.error("Cannot return to base: vacuum not initialized")
             return
 
-        await self.vacuum.async_set({
-            152: "AggG"  # Send 'return to dock' as a MODE command
-        })
+        # Return to dock is a MODE (152) command on the L60
+        await self.vacuum.async_set({TuyaCodes.MODE: "AggG"})
 
     async def async_start(self, **kwargs: Any) -> None:
         """Start the vacuum cleaner in auto mode."""
@@ -974,9 +978,7 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
             return
 
         _LOGGER.debug("Sending stop command to vacuum")
-        await self.vacuum.async_set({
-           "152": "AggN"
-        })
+        await self.vacuum.async_set({TuyaCodes.MODE: "AggN"})
 
     async def async_clean_spot(self, **kwargs: Any) -> None:
         """Perform a spot clean using direct payload for L60."""
@@ -1002,6 +1004,7 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
         normalized_fan_speed = fan_speed.lower().replace(" ", "_")
         value_map = {
             "quiet": "Quiet",
+            "pure": "Quiet",  # displayed label for Quiet
             "standard": "Standard",
             "turbo": "Turbo",
             "max": "Max",
@@ -1013,7 +1016,9 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
             _LOGGER.warning("Unsupported fan speed: %s", fan_speed)
             return
 
-        _LOGGER.debug("Sending fan speed '%s' with payload '%s'", normalized_fan_speed, command_value)
+        _LOGGER.debug(
+            "Sending fan speed '%s' with payload '%s'", normalized_fan_speed, command_value
+        )
         await self.vacuum.async_set({
             "158": command_value
         })
@@ -1036,51 +1041,23 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
             _LOGGER.error("Cannot send command: vacuum not initialized")
             return
 
-        if command == "edgeClean":
-            await self.vacuum.async_set({
-                self._get_dps_code("MODE"): self.vacuum.getRoboVacCommandValue(RobovacCommand.MODE, "edge")
-            })
-        elif command == "smallRoomClean":
-            await self.vacuum.async_set({
-                self._get_dps_code("MODE"): self.vacuum.getRoboVacCommandValue(RobovacCommand.MODE, "small_room")
-            })
-        elif command == "autoClean":
-            await self.vacuum.async_set({
-                self._get_dps_code("MODE"): self.vacuum.getRoboVacCommandValue(RobovacCommand.MODE, "auto")
-            })
-        elif command == "autoReturn":
-            await self.vacuum.async_set({
-                self._get_dps_code("AUTO_RETURN"): self._is_value_true(self.auto_return)
-            })
+        if command == "autoClean":
+            await self.vacuum.async_set(
+                {TuyaCodes.MODE: self.vacuum.getRoboVacCommandValue(RobovacCommand.MODE, "auto")}
+            )
         elif command == "doNotDisturb":
-            await self.vacuum.async_set({
-                self._get_dps_code("DO_NOT_DISTURB"): self._is_value_true(self.do_not_disturb)
-            })
-            if self._is_value_true(self.do_not_disturb):
-                await self.vacuum.async_set({
-                    self._get_dps_code("DO_NOT_DISTURB"): False
-                })
-            else:
-                await self.vacuum.async_set({
-                    self._get_dps_code("DO_NOT_DISTURB"): True
-                })
+            await self.vacuum.async_set(
+                {TuyaCodes.DO_NOT_DISTURB: not self._is_value_true(self.do_not_disturb)}
+            )
         elif command == "boostIQ":
-            await self.vacuum.async_set({
-                self._get_dps_code("BOOST_IQ"): self._is_value_true(self.boost_iq)
-            })
-        elif command == "roomClean" and params is not None and isinstance(params, dict):
-            room_ids = params.get("roomIds", [1])
-            count = params.get("count", 1)
-            clean_request = {"roomIds": room_ids, "cleanTimes": count}
-            method_call = {
-                "method": "selectRoomsClean",
-                "data": clean_request,
-                "timestamp": round(time.time() * 1000),
-            }
-            json_str = json.dumps(method_call, separators=(",", ":"))
-            base64_str = base64.b64encode(json_str.encode("utf8")).decode("utf8")
-            _LOGGER.info("roomClean call %s", json_str)
-            await self.vacuum.async_set({TuyaCodes.ROOM_CLEAN: base64_str})
+            await self.vacuum.async_set(
+                {TuyaCodes.BOOST_IQ: not self._is_value_true(self.boost_iq)}
+            )
+        else:
+            # edgeClean, smallRoomClean, autoReturn and roomClean came from the
+            # multi-model upstream: the L60 has no DPS or MODE payload for them
+            # (they sent invalid values, and roomClean raised AttributeError).
+            _LOGGER.warning("Command %s is not supported on the L60", command)
 
     async def async_added_to_hass(self) -> None:
         """Seed the last-known docked status after a restart or reload.

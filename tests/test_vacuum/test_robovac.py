@@ -1,147 +1,75 @@
-"""Tests for the RoboVac class."""
+"""Tests for the RoboVac model wrapper with the T2267 (L60) model details."""
 
 import pytest
-from unittest.mock import patch, MagicMock
-
 from homeassistant.components.vacuum import VacuumEntityFeature
 
-from custom_components.robovac.robovac import (
-    RoboVac,
-    ModelNotSupportedException,
+from custom_components.robovacl60.robovac import ModelNotSupportedException, RoboVac
+from custom_components.robovacl60.vacuums import ROBOVAC_MODELS
+from custom_components.robovacl60.vacuums.base import (
+    RobovacCommand,
+    RoboVacEntityFeature,
+    TuyaCodes,
 )
-from custom_components.robovac.vacuums.base import RoboVacEntityFeature
+from tests.conftest import t2267_model
 
 
-def test_init_unsupported_model():
-    """Test initialization with unsupported model raises exception."""
-    with patch(
-        "custom_components.robovac.robovac.TuyaDevice.__init__", return_value=None
+def test_only_t2267_is_registered():
+    """The fork supports the L60 (T2267) only."""
+    assert list(ROBOVAC_MODELS) == ["T2267"]
+
+
+def test_unsupported_model_raises():
+    """Any other model is rejected before a connection is attempted."""
+    with pytest.raises(ModelNotSupportedException):
+        RoboVac(model_code="T2118", device_id="x", host="h", local_key="0" * 16)
+
+
+def test_home_assistant_features():
+    features = t2267_model().getHomeAssistantFeatures()
+    for flag in (
+        VacuumEntityFeature.FAN_SPEED,
+        VacuumEntityFeature.LOCATE,
+        VacuumEntityFeature.PAUSE,
+        VacuumEntityFeature.RETURN_HOME,
+        VacuumEntityFeature.SEND_COMMAND,
+        VacuumEntityFeature.START,
+        VacuumEntityFeature.STATE,
+        VacuumEntityFeature.STOP,
     ):
-        with pytest.raises(ModelNotSupportedException):
-            RoboVac(
-                model_code="UNSUPPORTED",
-                device_id="test_id",
-                host="192.168.1.100",
-                local_key="test_key",
-                timeout=30,
-                ping_interval=15,
-                update_entity_state=None,
-            )
+        assert features & flag
 
 
-def test_get_home_assistant_features():
-    """Test getHomeAssistantFeatures returns correct features for different models."""
-    with patch(
-        "custom_components.robovac.robovac.TuyaDevice.__init__", return_value=None
-    ):
-        robovac_15c = RoboVac(
-            model_code="T2118",
-            device_id="test_id",
-            host="192.168.1.100",
-            local_key="test_key",
-        )
-
-        expected_features = (
-            VacuumEntityFeature.BATTERY
-            | VacuumEntityFeature.CLEAN_SPOT
-            | VacuumEntityFeature.FAN_SPEED
-            | VacuumEntityFeature.LOCATE
-            | VacuumEntityFeature.PAUSE
-            | VacuumEntityFeature.RETURN_HOME
-            | VacuumEntityFeature.SEND_COMMAND
-            | VacuumEntityFeature.START
-            | VacuumEntityFeature.STATE
-            | VacuumEntityFeature.STOP
-        )
-
-        assert robovac_15c.getHomeAssistantFeatures() == expected_features
-
-        robovac_l70 = RoboVac(
-            model_code="T2190",  # L70 model (has map)
-            device_id="test_id",
-            host="192.168.1.100",
-            local_key="test_key",
-        )
-
-        expected_features_with_map = expected_features | VacuumEntityFeature.MAP
-
-        assert robovac_l70.getHomeAssistantFeatures() == expected_features_with_map
+def test_robovac_features():
+    features = t2267_model().getRoboVacFeatures()
+    assert features & RoboVacEntityFeature.DO_NOT_DISTURB
+    assert features & RoboVacEntityFeature.BOOST_IQ
+    assert not features & RoboVacEntityFeature.CONSUMABLES
 
 
-def test_get_robovac_features():
-    """Test getRoboVacFeatures returns correct features for different models."""
-    with patch(
-        "custom_components.robovac.robovac.TuyaDevice.__init__", return_value=None
-    ):
-        robovac_15c = RoboVac(
-            model_code="T2118",  # 15C model
-            device_id="test_id",
-            host="192.168.1.100",
-            local_key="test_key",
-        )
-
-        expected_c_features = (
-            RoboVacEntityFeature.EDGE | RoboVacEntityFeature.SMALL_ROOM
-        )
-
-        assert robovac_15c.getRoboVacFeatures() == expected_c_features
-
-        robovac_g30 = RoboVac(
-            model_code="T2250",  # G30 model
-            device_id="test_id",
-            host="192.168.1.100",
-            local_key="test_key",
-        )
-
-        expected_g_features = (
-            RoboVacEntityFeature.CLEANING_TIME
-            | RoboVacEntityFeature.CLEANING_AREA
-            | RoboVacEntityFeature.DO_NOT_DISTURB
-            | RoboVacEntityFeature.AUTO_RETURN
-        )
-
-        assert robovac_g30.getRoboVacFeatures() == expected_g_features
-
-        robovac_l70 = RoboVac(
-            model_code="T2190",  # L70 model
-            device_id="test_id",
-            host="192.168.1.100",
-            local_key="test_key",
-        )
-
-        expected_l_features = (
-            RoboVacEntityFeature.CLEANING_TIME
-            | RoboVacEntityFeature.CLEANING_AREA
-            | RoboVacEntityFeature.DO_NOT_DISTURB
-            | RoboVacEntityFeature.AUTO_RETURN
-            | RoboVacEntityFeature.ROOM
-            | RoboVacEntityFeature.ZONE
-            | RoboVacEntityFeature.BOOST_IQ
-            | RoboVacEntityFeature.MAP
-            | RoboVacEntityFeature.CONSUMABLES
-        )
-
-        assert robovac_l70.getRoboVacFeatures() == expected_l_features
+def test_fan_speeds():
+    assert t2267_model().getFanSpeeds() == ["Quiet", "Standard", "Turbo", "Max", "Boost_IQ"]
 
 
-def test_get_fan_speeds():
-    """Test getFanSpeeds returns correct fan speeds for different series."""
-    with patch(
-        "custom_components.robovac.robovac.TuyaDevice.__init__", return_value=None
-    ):
-        test_cases = [
-            ("T2118", ["No_suction", "Standard", "Boost_IQ", "Max"]),
-            ("T2250", ["Standard", "Turbo", "Max", "Boost_IQ"]),
-            ("T2190", ["Quiet", "Standard", "Turbo", "Max"]),
-            ("T2261", ["Pure", "Standard", "Turbo", "Max"]),
-        ]
+def test_dps_codes_match_tuya_codes():
+    """getDpsCodes() and TuyaCodes agree on every L60 DPS."""
+    codes = t2267_model().getDpsCodes()
+    assert codes["MODE"] == TuyaCodes.MODE == "152"
+    assert codes["STATUS"] == TuyaCodes.STATUS == "153"
+    assert codes["FAN_SPEED"] == TuyaCodes.FAN_SPEED == "158"
+    assert codes["LOCATE"] == TuyaCodes.LOCATE == "160"
+    assert codes["BATTERY_LEVEL"] == TuyaCodes.BATTERY_LEVEL == "163"
+    assert codes["ERROR_CODE"] == TuyaCodes.ERROR_CODE == "177"
+    assert codes["DO_NOT_DISTURB"] == TuyaCodes.DO_NOT_DISTURB == "157"
+    assert codes["BOOST_IQ"] == TuyaCodes.BOOST_IQ == "159"
 
-        for model_code, expected_speeds in test_cases:
-            robovac = RoboVac(
-                model_code=model_code,
-                device_id="test_id",
-                host="192.168.1.100",
-                local_key="test_key",
-            )
 
-            assert robovac.getFanSpeeds() == expected_speeds
+@pytest.mark.parametrize(
+    ("value", "payload"),
+    [("auto", "BBoCCAE="), ("pause", "AggN"), ("return", "AggG"), ("Spot", "AA==")],
+)
+def test_mode_command_values(value, payload):
+    assert t2267_model().getRoboVacCommandValue(RobovacCommand.MODE, value) == payload
+
+
+def test_unknown_command_value_passes_through():
+    assert t2267_model().getRoboVacCommandValue(RobovacCommand.MODE, "edge") == "edge"
