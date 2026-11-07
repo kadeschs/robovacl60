@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 import requests
 
-from custom_components.robovac.eufywebapi import EufyLogon
+from custom_components.robovacl60.eufywebapi import EufyLogon
 
 
 @pytest.fixture

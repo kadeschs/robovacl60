@@ -37,7 +37,7 @@ ERROR_MESSAGES = {
 }
 
 
-def getErrorMessage(code: str | int) -> str:
+def getErrorMessage(code: str | int | None) -> str:
     """Get the error message for a given error code.
 
     Args:

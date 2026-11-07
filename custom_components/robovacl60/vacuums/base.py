@@ -61,5 +61,3 @@ class RobovacModelDetails(Protocol):
     homeassistant_features: int
     robovac_features: int
     commands: Dict[RobovacCommand, Dict[str, Any]]
-    dps_codes: Dict[str, str]
-4
