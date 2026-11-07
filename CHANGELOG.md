@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1](https://github.com/kadeschs/robovacl60/compare/v1.4.0...v1.4.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* don't report error for the L60's no-error DPS 177 payload ([5773002](https://github.com/kadeschs/robovacl60/commit/577300264e07b736cdfcd1613c5936703dafc6ea))
+* restore docked status after restart, clear stale connection sentinel, sensor startup race ([2b3aaae](https://github.com/kadeschs/robovacl60/commit/2b3aaae9168bcc625b3d4a871da59214a018292d))
+
 ## [1.4.0](https://github.com/kadeschs/robovacl60/compare/v1.3.1...v1.4.0) (2026-07-23)
 
 
