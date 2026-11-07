@@ -868,9 +868,10 @@ class RoboVacEntity(StateVacuumEntity, RestoreEntity):
         if cleaning_time is not None:
             self._attr_cleaning_time = str(cleaning_time)
 
-        # DND (157) and BoostIQ (159) arrive in every L60 GET reply. These were
-        # read with int keys (always None: DPS keys are strings) and only inside
-        # the cleaning_time block, which the L60 never enters.
+        # BoostIQ (159) arrives in every L60 GET reply; DND (157) only when the
+        # robot pushes it. Both were read with int keys (always None: DPS keys
+        # are strings) and only inside the cleaning_time block, which the L60
+        # never enters.
         do_not_disturb = self.tuyastatus.get(TuyaCodes.DO_NOT_DISTURB)
         if do_not_disturb is not None:
             self._attr_do_not_disturb = str(do_not_disturb)
