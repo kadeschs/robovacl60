@@ -45,6 +45,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import CONF_VACS, DOMAIN, PING_RATE, REFRESH_RATE, TIMEOUT
 from .errors import getErrorMessage
@@ -135,7 +136,7 @@ async def async_setup_entry(
     async_add_entities(entities, update_before_add=True)
 
 
-class RoboVacEntity(StateVacuumEntity):
+class RoboVacEntity(StateVacuumEntity, RestoreEntity):
     """Eufy Robovac vacuum entity.
 
     This class represents a Eufy Robovac vacuum cleaner in Home Assistant.
@@ -994,6 +995,34 @@ class RoboVacEntity(StateVacuumEntity):
             base64_str = base64.b64encode(json_str.encode("utf8")).decode("utf8")
             _LOGGER.info("roomClean call %s", json_str)
             await self.vacuum.async_set({TuyaCodes.ROOM_CLEAN: base64_str})
+
+    async def async_added_to_hass(self) -> None:
+        """Seed the last-known docked status after a restart or reload.
+
+        The L60 never includes DPS 153 (status) in GET replies and ignores
+        UPDATEDPS requests for it (verified Nov 7, 2026); it only pushes
+        153 when its status changes. Without this, a vacuum sitting on its
+        dock reports status Unknown / idle after every HA restart until its
+        next run. Only docked states are restored: a restored "cleaning"
+        could be stale if the run ended while HA was down, and idle is the
+        safer guess there. Any live push overwrites the seeded value.
+        """
+        await super().async_added_to_hass()
+        if self.vacuum is None or "153" in self.vacuum._dps:
+            return
+        last_state = await self.async_get_last_state()
+        if last_state is None:
+            return
+        status_raw = last_state.attributes.get("status_raw")
+        if not status_raw or decode_status_string(status_raw) != "docked":
+            return
+        self.vacuum._dps["153"] = status_raw
+        _LOGGER.debug(
+            "Restored last-known docked status %r for %s",
+            status_raw,
+            self._attr_name,
+        )
+        self.update_entity_values()
 
     async def async_will_remove_from_hass(self) -> None:
         """Handle removal from Home Assistant."""

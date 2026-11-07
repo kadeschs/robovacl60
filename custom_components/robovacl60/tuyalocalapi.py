@@ -912,6 +912,14 @@ class TuyaDevice:
         response = await self.async_receive(message)
         if response is not None:
             await self.async_update_state(response)
+            # A good GET reply proves the link is up. Drop the transport
+            # sentinel async_connect() writes into the error DPS on a
+            # timeout: the L60 never includes DPS 177 in GET replies, so
+            # without this a stale "CONNECTION_FAILED" outlives the outage
+            # until the robot happens to push a fresh 177.
+            error_dps = str(self.model_details.commands[RobovacCommand.ERROR]["code"])
+            if self._dps.get(error_dps) == "CONNECTION_FAILED":
+                del self._dps[error_dps]
 
     async def async_set(self, dps: dict[str, Any]) -> None:
         """Set the state of the device.

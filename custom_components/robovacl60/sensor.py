@@ -66,8 +66,14 @@ class RobovacBatterySensor(SensorEntity):
         """Fetch the latest battery level from the saved vacuum client."""
         try:
             vac_client = self.hass.data[DOMAIN][self.entry_id][CONF_VACS].get(self.robovac_id)
-            if vac_client and vac_client.tuyastatus:
-                level = vac_client.tuyastatus.get(TuyaCodes.BATTERY_LEVEL)
+            # During platform startup, CONF_VACS briefly holds the raw config
+            # dict for each vacuum until vacuum.py's async_setup_entry swaps it
+            # for the real entity (which owns .tuyastatus). getattr() treats
+            # that pre-swap dict the same as "not ready yet" instead of raising
+            # AttributeError: 'dict' object has no attribute 'tuyastatus'.
+            tuyastatus = getattr(vac_client, "tuyastatus", None)
+            if vac_client and tuyastatus:
+                level = tuyastatus.get(TuyaCodes.BATTERY_LEVEL)
                 self._attr_native_value = level
                 self._attr_available = True
             else:
